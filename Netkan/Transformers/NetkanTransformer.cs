@@ -8,6 +8,7 @@ using CKAN.NetKAN.Services;
 using CKAN.NetKAN.Validators;
 using CKAN.NetKAN.Sources.Github;
 using CKAN.NetKAN.Sources.Gitlab;
+using CKAN.NetKAN.Sources.Gitea;
 using CKAN.NetKAN.Sources.Jenkins;
 using CKAN.NetKAN.Sources.Spacedock;
 using CKAN.NetKAN.Sources.SourceForge;
@@ -32,6 +33,7 @@ namespace CKAN.NetKAN.Transformers
             _validator = validator;
             var ghApi = new GithubApi(http, githubToken);
             var glApi = new GitlabApi(http, gitlabToken);
+            var giteaAPi = new GiteaApi(http);
             var sfApi = new SourceForgeApi(http);
             var swLoader = new SpaceWarpInfoLoader(http, ghApi);
             _transformers = InjectVersionedOverrideTransformers(new ITransformer[]
@@ -41,6 +43,7 @@ namespace CKAN.NetKAN.Transformers
                 new SpacedockTransformer(new SpacedockApi(http), ghApi),
                 new GithubTransformer(ghApi, prerelease),
                 new GitlabTransformer(glApi),
+                new GiteaTransformer(giteaAPi),
                 new SourceForgeTransformer(sfApi),
                 new HttpTransformer(http, userAgent),
                 new JenkinsTransformer(new JenkinsApi(http)),
