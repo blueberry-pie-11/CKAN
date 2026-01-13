@@ -48,7 +48,7 @@ namespace CKAN.NetKAN.Sources.Github
         public JObject Resources => new JObject()
         {
             { "repository",  HtmlUrl  },
-            { "homepage",    Homepage },
+            { "homepage",    Net.NormalizeUri(Homepage ?? "") },
             // issues_url ends with {/number} which makes it kind of useless
             { "bugtracker",  HasIssues      ? $"{HtmlUrl}/issues"      : null },
             { "discussions", HasDiscussions ? $"{HtmlUrl}/discussions" : null },
