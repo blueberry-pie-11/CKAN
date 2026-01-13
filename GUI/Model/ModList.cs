@@ -67,10 +67,182 @@ namespace CKAN.GUI
         public readonly Dictionary<string, DataGridViewRow> full_list_of_mod_rows;
         public event    Action?                             ModFiltersUpdated;
 
-        // Unlike GUIMod.IsInstalled, DataGridViewRow.Visible can change on the fly without notifying us
-        public bool HasVisibleInstalled()
-            => full_list_of_mod_rows.Values.Any(row => ((row.Tag as GUIMod)?.IsInstalled ?? false)
-                                                       && row.Visible);
+        #region Building the mod list
+
+        /// <summary>
+        /// Get all the GUI mods for the given instance.
+        /// </summary>
+        /// <param name="registry">Registry of the instance</param>
+        /// <param name="repoData">Repo data of the instance</param>
+        /// <param name="inst">Game instance</param>
+        /// <param name="allLabels">All label definitions</param>
+        /// <param name="cache">Cache for checking if mods are cached</param>
+        /// <param name="config">GUI config to use</param>
+        /// <returns>Sequence of GUIMods</returns>
+        public static IEnumerable<GUIMod> GetGUIMods(IRegistryQuerier      registry,
+                                                     RepositoryDataManager repoData,
+                                                     GameInstance          inst,
+                                                     ModuleLabelList       allLabels,
+                                                     NetModuleCache        cache,
+                                                     GUIConfiguration?     config)
+            => GetGUIMods(registry, repoData, inst,
+                          registry.InstalledModules.Select(im => im.identifier)
+                                                   .ToHashSet(),
+                          allLabels,
+                          cache,
+                          config?.HideEpochs ?? false, config?.HideV ?? false);
+
+        private static IEnumerable<GUIMod> GetGUIMods(IRegistryQuerier      registry,
+                                                      RepositoryDataManager repoData,
+                                                      GameInstance          inst,
+                                                      HashSet<string>       installedIdents,
+                                                      ModuleLabelList       allLabels,
+                                                      NetModuleCache        cache,
+                                                      bool                  hideEpochs,
+                                                      bool                  hideV)
+            => registry.CheckUpgradeable(inst,
+                                         allLabels.HeldIdentifiers(inst)
+                                                  .ToHashSet(),
+                                         allLabels.IgnoreMissingIdentifiers(inst)
+                                                  .ToHashSet())
+                       .SelectMany(kvp => kvp.Value
+                                             .Select(mod => registry.IsAutodetected(mod.identifier)
+                                                            ? new GUIMod(mod, repoData, registry,
+                                                                         inst.StabilityToleranceConfig,
+                                                                         inst, cache, null,
+                                                                         hideEpochs, hideV)
+                                                              {
+                                                                  HasUpdate = kvp.Key,
+                                                              }
+                                                            : registry.InstalledModule(mod.identifier)
+                                                              is InstalledModule found
+                                                              ? new GUIMod(found,
+                                                                           repoData, registry,
+                                                                           inst.StabilityToleranceConfig,
+                                                                           inst, cache, null,
+                                                                           hideEpochs, hideV)
+                                                              {
+                                                                  HasUpdate = kvp.Key,
+                                                              }
+                                                              : null))
+                       .OfType<GUIMod>()
+                       .Concat(registry.CompatibleModules(inst.StabilityToleranceConfig, inst.VersionCriteria())
+                                       .Where(m => !installedIdents.Contains(m.identifier))
+                                       .AsParallel()
+                                       .Where(m => !m.IsDLC)
+                                       .Select(m => new GUIMod(m, repoData, registry,
+                                                               inst.StabilityToleranceConfig,
+                                                               inst, cache, null,
+                                                               hideEpochs, hideV)))
+                       .Concat(registry.IncompatibleModules(inst.StabilityToleranceConfig, inst.VersionCriteria())
+                                       .Where(m => !installedIdents.Contains(m.identifier))
+                                       .AsParallel()
+                                       .Where(m => !m.IsDLC)
+                                       .Select(m => new GUIMod(m, repoData, registry,
+                                                               inst.StabilityToleranceConfig,
+                                                               inst, cache, true,
+                                                               hideEpochs, hideV)));
+
+        private DataGridViewRow MakeRow(GUIMod           mod,
+                                        List<ModChange>? changes,
+                                        GameInstance     instance)
+        {
+            DataGridViewRow item = new DataGridViewRow() { Tag = mod };
+
+            item.DefaultCellStyle.BackColor = GetRowBackground(mod, false, instance);
+            item.DefaultCellStyle.ForeColor = item.DefaultCellStyle.BackColor.ForeColorForBackColor()
+                                              ?? SystemColors.WindowText;
+            item.DefaultCellStyle.SelectionBackColor = SelectionBlend(item.DefaultCellStyle.BackColor);
+            item.DefaultCellStyle.SelectionForeColor = item.DefaultCellStyle.SelectionBackColor.ForeColorForBackColor()
+                                                       ?? SystemColors.HighlightText;
+
+            var myChange = changes?.FindLast(ch => ch.Mod.Equals(mod));
+
+            var selecting = mod.IsAutodetected
+                ? new DataGridViewTextBoxCell()
+                {
+                    Value = Properties.Resources.MainModListAutoDetected
+                }
+                : mod.IsInstallable()
+                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
+                {
+                    Value = myChange == null
+                        ? mod.IsInstalled
+                        : myChange.ChangeType == GUIModChangeType.Install
+                          || (myChange.ChangeType != GUIModChangeType.Remove && mod.IsInstalled)
+                }
+                : new DataGridViewTextBoxCell()
+                {
+                    Value = "-"
+                };
+
+            var autoInstalled = mod.IsInstalled && !mod.IsAutodetected
+                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
+                {
+                    Value = mod.IsAutoInstalled,
+                    ToolTipText = Properties.Resources.MainModListAutoInstalledToolTip,
+                }
+                : new DataGridViewTextBoxCell()
+                {
+                    Value = "-"
+                };
+
+            var updating = mod.IsInstallable() && mod.HasUpdate
+                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
+                {
+                    Value = myChange?.ChangeType == GUIModChangeType.Update
+                }
+                : new DataGridViewTextBoxCell()
+                {
+                    Value = "-"
+                };
+
+            var replacing = (mod.IsInstalled && mod.HasReplacement)
+                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
+                {
+                    Value = myChange?.ChangeType == GUIModChangeType.Replace
+                }
+                : new DataGridViewTextBoxCell()
+                {
+                    Value = "-"
+                };
+
+            var name   = new DataGridViewTextBoxCell { Value = ToGridText(mod.Name)                       };
+            var author = new DataGridViewTextBoxCell { Value = ToGridText(string.Join(", ", mod.Authors)) };
+
+            var installVersion = new DataGridViewTextBoxCell()
+            {
+                Value = mod.InstalledVersion
+            };
+
+            var latestVersion = new DataGridViewTextBoxCell()
+            {
+                Value = mod.LatestVersion
+            };
+
+            var downloadCount = new DataGridViewTextBoxCell { Value = $"{mod.DownloadCount:N0}"   };
+            var compat        = new DataGridViewTextBoxCell { Value = mod.GameCompatibility       };
+            var downloadSize  = new DataGridViewTextBoxCell { Value = mod.DownloadSize            };
+            var installSize   = new DataGridViewTextBoxCell { Value = mod.InstallSize             };
+            var releaseDate   = new DataGridViewTextBoxCell { Value = mod.Module.release_date?.ToLocalTime() };
+            var installDate   = new DataGridViewTextBoxCell { Value = mod.InstallDate             };
+            var desc          = new DataGridViewTextBoxCell { Value = ToGridText(mod.Abstract)    };
+
+            item.Cells.AddRange(selecting, autoInstalled, updating, replacing, name, author, installVersion, latestVersion, compat, downloadSize, installSize, releaseDate, installDate, downloadCount, desc);
+
+            selecting.ReadOnly     = selecting     is DataGridViewTextBoxCell;
+            autoInstalled.ReadOnly = autoInstalled is DataGridViewTextBoxCell;
+            updating.ReadOnly      = updating      is DataGridViewTextBoxCell;
+
+            return item;
+        }
+
+        private static string ToGridText(string text)
+            => Platform.IsMono ? text.Replace("&", "&&") : text;
+
+        #endregion
+
+        #region Search & filters
 
         public void SetSearches(List<ModSearch> newSearches)
         {
@@ -100,9 +272,65 @@ namespace CKAN.GUI
                          },
             };
 
+        private static bool SearchesEqual(IReadOnlyCollection<ModSearch> a,
+                                          IReadOnlyCollection<ModSearch> b)
+            => a.SequenceEqual(b);
+
+        private static string FilterName(GUIModFilter filter,
+                                         ModuleTag?   tag   = null,
+                                         ModuleLabel? label = null)
+            => filter switch
+               {
+                   GUIModFilter.Compatible               => Properties.Resources.MainFilterCompatible,
+                   GUIModFilter.Incompatible             => Properties.Resources.MainFilterIncompatible,
+                   GUIModFilter.Installed                => Properties.Resources.MainFilterInstalled,
+                   GUIModFilter.NotInstalled             => Properties.Resources.MainFilterNotInstalled,
+                   GUIModFilter.InstalledUpdateAvailable => Properties.Resources.MainFilterUpgradeable,
+                   GUIModFilter.Replaceable              => Properties.Resources.MainFilterReplaceable,
+                   GUIModFilter.Cached                   => Properties.Resources.MainFilterCached,
+                   GUIModFilter.Uncached                 => Properties.Resources.MainFilterUncached,
+                   GUIModFilter.NewInRepository          => Properties.Resources.MainFilterNew,
+                   GUIModFilter.All                      => Properties.Resources.MainFilterAll,
+                   GUIModFilter.CustomLabel              => string.Format(Properties.Resources.MainFilterLabel,
+                                                                          label?.Name ?? "CUSTOM"),
+                   GUIModFilter.Tag                      => tag == null
+                                                                ? Properties.Resources.MainFilterUntagged
+                                                                : string.Format(Properties.Resources.MainFilterTag,
+                                                                                tag.Name),
+                   _                                     => "",
+               };
+
+        #endregion
+
+        #region Visibility
+
+        // Unlike GUIMod.IsInstalled, DataGridViewRow.Visible can change on the fly without notifying us
+        public bool HasVisibleInstalled()
+            => full_list_of_mod_rows.Values.Any(row => ((row.Tag as GUIMod)?.IsInstalled ?? false)
+                                                       && row.Visible);
+
         public bool IsVisible(GUIMod mod, GameInstance instance, Registry registry)
             => activeSearches.IsEmptyOrAny(s => s.Matches(mod))
                && !HiddenByTagsOrLabels(mod, instance, registry);
+
+        private bool HiddenByTagsOrLabels(GUIMod m, GameInstance instance, Registry registry)
+            // "Hide" labels apply to all non-custom filters
+            => (allLabels?.LabelsFor(instance.Name)
+                                             .Where(l => !LabelInSearches(l) && l.Hide)
+                                             .Any(l => l.ContainsModule(instance.Game, m.Identifier))
+                                            ?? false)
+               || (registry.Tags?.Values
+                                 .Where(t => !TagInSearches(t) && allTags.HiddenTags.Contains(t.Name))
+                                 .Any(t => t.ModuleIdentifiers.Contains(m.Identifier))
+                                ?? false);
+
+        private bool TagInSearches(ModuleTag tag)
+            => activeSearches.Any(s => s.TagNames.Contains(tag.Name));
+
+        private bool LabelInSearches(ModuleLabel label)
+            => activeSearches.Any(s => s.LabelNames.Contains(label.Name));
+
+        #endregion
 
         public int CountModsBySearches(List<ModSearch> searches)
             => Modules.Count(mod => searches?.Any(s => s?.Matches(mod) ?? true) ?? true);
@@ -146,6 +374,8 @@ namespace CKAN.GUI
             }
             return null;
         }
+
+        #region Changesets
 
         public HashSet<ModChange> ComputeUserChangeSet(IRegistryQuerier     registry,
                                                        GameInstance         instance,
@@ -204,6 +434,20 @@ namespace CKAN.GUI
                             coreConfig)))
                 .ToHashSet();
         }
+
+        private static IEnumerable<ModChange> rowChanges(IRegistryQuerier    registry,
+                                                         DataGridViewRow     row,
+                                                         DataGridViewColumn? upgradeCol,
+                                                         DataGridViewColumn? replaceCol)
+            => row.Tag is GUIMod gmod ? gmod.GetModChanges(
+                   upgradeCol != null && upgradeCol.Visible
+                   && row.Cells[upgradeCol.Index] is DataGridViewCheckBoxCell upgradeCell
+                   && (bool)upgradeCell.Value,
+                   replaceCol != null && replaceCol.Visible
+                   && row.Cells[replaceCol.Index] is DataGridViewCheckBoxCell replaceCell
+                   && (bool)replaceCell.Value,
+                   registry.MetadataChanged(gmod.Identifier))
+               : Enumerable.Empty<ModChange>();
 
         /// <summary>
         /// Returns a changeset and conflicts based on the selections of the user.
@@ -319,6 +563,45 @@ namespace CKAN.GUI
         }
 
         /// <summary>
+        /// Get the InstalledModules that we'll have after the changeset,
+        /// not including dependencies
+        /// </summary>
+        /// <param name="registry">Registry with currently installed modules</param>
+        /// <param name="changeSet">Changes to be made to the installed modules</param>
+        private static IEnumerable<InstalledModule> InstalledAfterChanges(
+            IRegistryQuerier               registry,
+            IReadOnlyCollection<ModChange> changeSet)
+        {
+            var removingIdents = changeSet
+                .Where(ch => ch.ChangeType != GUIModChangeType.Install)
+                .Select(ch => ch.Mod.identifier)
+                .ToHashSet();
+            return registry.InstalledModules
+                .Where(im => !removingIdents.Contains(im.identifier))
+                .Concat(changeSet
+                    .Where(ch => ch.ChangeType is not GUIModChangeType.Remove
+                                              and not GUIModChangeType.Replace)
+                    .Select(ch => new InstalledModule(
+                        null,
+                        (ch as ModUpgrade)?.targetMod ?? ch.Mod,
+                        Enumerable.Empty<string>(),
+                        false)));
+        }
+
+        private static RelationshipResolverOptions conflictOptions(StabilityToleranceConfig stabilityTolerance)
+            => new RelationshipResolverOptions(stabilityTolerance)
+            {
+                without_toomanyprovides_kraken = true,
+                proceed_with_inconsistencies   = true,
+                without_enforce_consistency    = true,
+                with_recommends                = false
+            };
+
+        #endregion
+
+        #region Upgradeability
+
+        /// <summary>
         /// Check upgradeability of all rows and set GUIMod.HasUpdate appropriately
         /// </summary>
         /// <param name="inst">Current game instance</param>
@@ -353,80 +636,6 @@ namespace CKAN.GUI
             return upgGroups[true].Count > 0;
         }
 
-        /// <summary>
-        /// Get all the GUI mods for the given instance.
-        /// </summary>
-        /// <param name="registry">Registry of the instance</param>
-        /// <param name="repoData">Repo data of the instance</param>
-        /// <param name="inst">Game instance</param>
-        /// <param name="allLabels">All label definitions</param>
-        /// <param name="cache">Cache for checking if mods are cached</param>
-        /// <param name="config">GUI config to use</param>
-        /// <returns>Sequence of GUIMods</returns>
-        public static IEnumerable<GUIMod> GetGUIMods(IRegistryQuerier      registry,
-                                                     RepositoryDataManager repoData,
-                                                     GameInstance          inst,
-                                                     ModuleLabelList       allLabels,
-                                                     NetModuleCache        cache,
-                                                     GUIConfiguration?     config)
-            => GetGUIMods(registry, repoData, inst,
-                          registry.InstalledModules.Select(im => im.identifier)
-                                                   .ToHashSet(),
-                          allLabels,
-                          cache,
-                          config?.HideEpochs ?? false, config?.HideV ?? false);
-
-        private static IEnumerable<GUIMod> GetGUIMods(IRegistryQuerier      registry,
-                                                      RepositoryDataManager repoData,
-                                                      GameInstance          inst,
-                                                      HashSet<string>       installedIdents,
-                                                      ModuleLabelList       allLabels,
-                                                      NetModuleCache        cache,
-                                                      bool                  hideEpochs,
-                                                      bool                  hideV)
-            => registry.CheckUpgradeable(inst,
-                                         allLabels.HeldIdentifiers(inst)
-                                                  .ToHashSet(),
-                                         allLabels.IgnoreMissingIdentifiers(inst)
-                                                  .ToHashSet())
-                       .SelectMany(kvp => kvp.Value
-                                             .Select(mod => registry.IsAutodetected(mod.identifier)
-                                                            ? new GUIMod(mod, repoData, registry,
-                                                                         inst.StabilityToleranceConfig,
-                                                                         inst, cache, null,
-                                                                         hideEpochs, hideV)
-                                                              {
-                                                                  HasUpdate = kvp.Key,
-                                                              }
-                                                            : registry.InstalledModule(mod.identifier)
-                                                              is InstalledModule found
-                                                              ? new GUIMod(found,
-                                                                           repoData, registry,
-                                                                           inst.StabilityToleranceConfig,
-                                                                           inst, cache, null,
-                                                                           hideEpochs, hideV)
-                                                              {
-                                                                  HasUpdate = kvp.Key,
-                                                              }
-                                                              : null))
-                       .OfType<GUIMod>()
-                       .Concat(registry.CompatibleModules(inst.StabilityToleranceConfig, inst.VersionCriteria())
-                                       .Where(m => !installedIdents.Contains(m.identifier))
-                                       .AsParallel()
-                                       .Where(m => !m.IsDLC)
-                                       .Select(m => new GUIMod(m, repoData, registry,
-                                                               inst.StabilityToleranceConfig,
-                                                               inst, cache, null,
-                                                               hideEpochs, hideV)))
-                       .Concat(registry.IncompatibleModules(inst.StabilityToleranceConfig, inst.VersionCriteria())
-                                       .Where(m => !installedIdents.Contains(m.identifier))
-                                       .AsParallel()
-                                       .Where(m => !m.IsDLC)
-                                       .Select(m => new GUIMod(m, repoData, registry,
-                                                               inst.StabilityToleranceConfig,
-                                                               inst, cache, true,
-                                                               hideEpochs, hideV)));
-
         private void CheckRowUpgradeable(GameInstance              inst,
                                          List<ModChange>?          ChangeSet,
                                          DataGridViewRowCollection rows,
@@ -454,203 +663,14 @@ namespace CKAN.GUI
             }
         }
 
+        #endregion
+
         private static Color SelectionBlend(Color c)
             => c == Color.Empty
                 ? SystemColors.Highlight
                 : SystemColors.Highlight.AlphaBlendWith(selectionAlpha, c);
 
         private const float selectionAlpha = 0.4f;
-
-        private static IEnumerable<ModChange> rowChanges(IRegistryQuerier    registry,
-                                                         DataGridViewRow     row,
-                                                         DataGridViewColumn? upgradeCol,
-                                                         DataGridViewColumn? replaceCol)
-            => row.Tag is GUIMod gmod ? gmod.GetModChanges(
-                   upgradeCol != null && upgradeCol.Visible
-                   && row.Cells[upgradeCol.Index] is DataGridViewCheckBoxCell upgradeCell
-                   && (bool)upgradeCell.Value,
-                   replaceCol != null && replaceCol.Visible
-                   && row.Cells[replaceCol.Index] is DataGridViewCheckBoxCell replaceCell
-                   && (bool)replaceCell.Value,
-                   registry.MetadataChanged(gmod.Identifier))
-               : Enumerable.Empty<ModChange>();
-
-        private DataGridViewRow MakeRow(GUIMod           mod,
-                                        List<ModChange>? changes,
-                                        GameInstance     instance)
-        {
-            DataGridViewRow item = new DataGridViewRow() { Tag = mod };
-
-            item.DefaultCellStyle.BackColor = GetRowBackground(mod, false, instance);
-            item.DefaultCellStyle.ForeColor = item.DefaultCellStyle.BackColor.ForeColorForBackColor()
-                                              ?? SystemColors.WindowText;
-            item.DefaultCellStyle.SelectionBackColor = SelectionBlend(item.DefaultCellStyle.BackColor);
-            item.DefaultCellStyle.SelectionForeColor = item.DefaultCellStyle.SelectionBackColor.ForeColorForBackColor()
-                                                       ?? SystemColors.HighlightText;
-
-            var myChange = changes?.FindLast(ch => ch.Mod.Equals(mod));
-
-            var selecting = mod.IsAutodetected
-                ? new DataGridViewTextBoxCell()
-                {
-                    Value = Properties.Resources.MainModListAutoDetected
-                }
-                : mod.IsInstallable()
-                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
-                {
-                    Value = myChange == null
-                        ? mod.IsInstalled
-                        : myChange.ChangeType == GUIModChangeType.Install
-                          || (myChange.ChangeType != GUIModChangeType.Remove && mod.IsInstalled)
-                }
-                : new DataGridViewTextBoxCell()
-                {
-                    Value = "-"
-                };
-
-            var autoInstalled = mod.IsInstalled && !mod.IsAutodetected
-                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
-                {
-                    Value = mod.IsAutoInstalled,
-                    ToolTipText = Properties.Resources.MainModListAutoInstalledToolTip,
-                }
-                : new DataGridViewTextBoxCell()
-                {
-                    Value = "-"
-                };
-
-            var updating = mod.IsInstallable() && mod.HasUpdate
-                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
-                {
-                    Value = myChange?.ChangeType == GUIModChangeType.Update
-                }
-                : new DataGridViewTextBoxCell()
-                {
-                    Value = "-"
-                };
-
-            var replacing = (mod.IsInstalled && mod.HasReplacement)
-                ? (DataGridViewCell) new DataGridViewCheckBoxCell()
-                {
-                    Value = myChange?.ChangeType == GUIModChangeType.Replace
-                }
-                : new DataGridViewTextBoxCell()
-                {
-                    Value = "-"
-                };
-
-            var name   = new DataGridViewTextBoxCell { Value = ToGridText(mod.Name)                       };
-            var author = new DataGridViewTextBoxCell { Value = ToGridText(string.Join(", ", mod.Authors)) };
-
-            var installVersion = new DataGridViewTextBoxCell()
-            {
-                Value = mod.InstalledVersion
-            };
-
-            var latestVersion = new DataGridViewTextBoxCell()
-            {
-                Value = mod.LatestVersion
-            };
-
-            var downloadCount = new DataGridViewTextBoxCell { Value = $"{mod.DownloadCount:N0}"   };
-            var compat        = new DataGridViewTextBoxCell { Value = mod.GameCompatibility       };
-            var downloadSize  = new DataGridViewTextBoxCell { Value = mod.DownloadSize            };
-            var installSize   = new DataGridViewTextBoxCell { Value = mod.InstallSize             };
-            var releaseDate   = new DataGridViewTextBoxCell { Value = mod.Module.release_date?.ToLocalTime() };
-            var installDate   = new DataGridViewTextBoxCell { Value = mod.InstallDate             };
-            var desc          = new DataGridViewTextBoxCell { Value = ToGridText(mod.Abstract)    };
-
-            item.Cells.AddRange(selecting, autoInstalled, updating, replacing, name, author, installVersion, latestVersion, compat, downloadSize, installSize, releaseDate, installDate, downloadCount, desc);
-
-            selecting.ReadOnly     = selecting     is DataGridViewTextBoxCell;
-            autoInstalled.ReadOnly = autoInstalled is DataGridViewTextBoxCell;
-            updating.ReadOnly      = updating      is DataGridViewTextBoxCell;
-
-            return item;
-        }
-
-        private static string ToGridText(string text)
-            => Platform.IsMono ? text.Replace("&", "&&") : text;
-
-        private bool TagInSearches(ModuleTag tag)
-            => activeSearches.Any(s => s.TagNames.Contains(tag.Name));
-
-        private bool LabelInSearches(ModuleLabel label)
-            => activeSearches.Any(s => s.LabelNames.Contains(label.Name));
-
-        private bool HiddenByTagsOrLabels(GUIMod m, GameInstance instance, Registry registry)
-            // "Hide" labels apply to all non-custom filters
-            => (allLabels?.LabelsFor(instance.Name)
-                                             .Where(l => !LabelInSearches(l) && l.Hide)
-                                             .Any(l => l.ContainsModule(instance.Game, m.Identifier))
-                                            ?? false)
-               || (registry.Tags?.Values
-                                 .Where(t => !TagInSearches(t) && allTags.HiddenTags.Contains(t.Name))
-                                 .Any(t => t.ModuleIdentifiers.Contains(m.Identifier))
-                                ?? false);
-
-        private static RelationshipResolverOptions conflictOptions(StabilityToleranceConfig stabilityTolerance)
-            => new RelationshipResolverOptions(stabilityTolerance)
-            {
-                without_toomanyprovides_kraken = true,
-                proceed_with_inconsistencies   = true,
-                without_enforce_consistency    = true,
-                with_recommends                = false
-            };
-
-        /// <summary>
-        /// Get the InstalledModules that we'll have after the changeset,
-        /// not including dependencies
-        /// </summary>
-        /// <param name="registry">Registry with currently installed modules</param>
-        /// <param name="changeSet">Changes to be made to the installed modules</param>
-        private static IEnumerable<InstalledModule> InstalledAfterChanges(
-            IRegistryQuerier               registry,
-            IReadOnlyCollection<ModChange> changeSet)
-        {
-            var removingIdents = changeSet
-                .Where(ch => ch.ChangeType != GUIModChangeType.Install)
-                .Select(ch => ch.Mod.identifier)
-                .ToHashSet();
-            return registry.InstalledModules
-                .Where(im => !removingIdents.Contains(im.identifier))
-                .Concat(changeSet
-                    .Where(ch => ch.ChangeType is not GUIModChangeType.Remove
-                                              and not GUIModChangeType.Replace)
-                    .Select(ch => new InstalledModule(
-                        null,
-                        (ch as ModUpgrade)?.targetMod ?? ch.Mod,
-                        Enumerable.Empty<string>(),
-                        false)));
-        }
-
-        private static bool SearchesEqual(IReadOnlyCollection<ModSearch> a,
-                                          IReadOnlyCollection<ModSearch> b)
-            => a.SequenceEqual(b);
-
-        private static string FilterName(GUIModFilter filter,
-                                         ModuleTag?   tag   = null,
-                                         ModuleLabel? label = null)
-            => filter switch
-               {
-                   GUIModFilter.Compatible               => Properties.Resources.MainFilterCompatible,
-                   GUIModFilter.Incompatible             => Properties.Resources.MainFilterIncompatible,
-                   GUIModFilter.Installed                => Properties.Resources.MainFilterInstalled,
-                   GUIModFilter.NotInstalled             => Properties.Resources.MainFilterNotInstalled,
-                   GUIModFilter.InstalledUpdateAvailable => Properties.Resources.MainFilterUpgradeable,
-                   GUIModFilter.Replaceable              => Properties.Resources.MainFilterReplaceable,
-                   GUIModFilter.Cached                   => Properties.Resources.MainFilterCached,
-                   GUIModFilter.Uncached                 => Properties.Resources.MainFilterUncached,
-                   GUIModFilter.NewInRepository          => Properties.Resources.MainFilterNew,
-                   GUIModFilter.All                      => Properties.Resources.MainFilterAll,
-                   GUIModFilter.CustomLabel              => string.Format(Properties.Resources.MainFilterLabel,
-                                                                          label?.Name ?? "CUSTOM"),
-                   GUIModFilter.Tag                      => tag == null
-                                                                ? Properties.Resources.MainFilterUntagged
-                                                                : string.Format(Properties.Resources.MainFilterTag,
-                                                                                tag.Name),
-                   _                                     => "",
-               };
 
         private readonly ModuleLabelList                allLabels;
         private readonly ModuleTagList                  allTags;
