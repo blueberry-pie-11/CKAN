@@ -36,6 +36,8 @@ namespace CKAN.GUI
             this.SkipColumn = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.ModColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.ErrorColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.GridContextMenuStrip = new System.Windows.Forms.ContextMenuStrip();
+            this.CopyErrorToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.BottomButtonPanel = new CKAN.GUI.LeftRightRowPanel();
             this.RetryButton = new System.Windows.Forms.Button();
             this.AbortButton = new System.Windows.Forms.Button();
@@ -88,6 +90,7 @@ namespace CKAN.GUI
             this.DownloadsGrid.CellMouseDoubleClick += new System.Windows.Forms.DataGridViewCellMouseEventHandler(this.DownloadsGrid_CellMouseDoubleClick);
             this.DownloadsGrid.CellEndEdit += new System.Windows.Forms.DataGridViewCellEventHandler(this.DownloadsGrid_CellEndEdit);
             this.DownloadsGrid.SelectionChanged += new System.EventHandler(DownloadsGrid_SelectionChanged);
+            this.DownloadsGrid.MouseDown += new System.Windows.Forms.MouseEventHandler(this.DownloadsGrid_MouseDown);
             //
             // RetryColumn
             //
@@ -126,6 +129,20 @@ namespace CKAN.GUI
             this.ErrorColumn.FillWeight = 500;
             this.ErrorColumn.DefaultCellStyle.WrapMode = System.Windows.Forms.DataGridViewTriState.True;
             resources.ApplyResources(this.ErrorColumn, "ErrorColumn");
+            //
+            // GridContextMenuStrip
+            //
+            this.GridContextMenuStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.CopyErrorToolStripMenuItem});
+            this.GridContextMenuStrip.Name = "GridContextMenuStrip";
+            this.GridContextMenuStrip.Size = new System.Drawing.Size(180, 70);
+            //
+            // CopyErrorToolStripMenuItem
+            //
+            this.CopyErrorToolStripMenuItem.Name = "CopyErrorToolStripMenuItem";
+            this.CopyErrorToolStripMenuItem.Size = new System.Drawing.Size(179, 22);
+            this.CopyErrorToolStripMenuItem.Click += new System.EventHandler(this.CopyErrorToolStripMenuItem_Click);
+            resources.ApplyResources(this.CopyErrorToolStripMenuItem, "CopyErrorToolStripMenuItem");
             //
             // BottomButtonPanel
             //
@@ -188,6 +205,8 @@ namespace CKAN.GUI
         private System.Windows.Forms.DataGridViewCheckBoxColumn SkipColumn;
         private System.Windows.Forms.DataGridViewTextBoxColumn ModColumn;
         private System.Windows.Forms.DataGridViewTextBoxColumn ErrorColumn;
+        private System.Windows.Forms.ContextMenuStrip GridContextMenuStrip;
+        private System.Windows.Forms.ToolStripMenuItem CopyErrorToolStripMenuItem;
         private CKAN.GUI.LeftRightRowPanel BottomButtonPanel;
         private System.Windows.Forms.Button RetryButton;
         private System.Windows.Forms.Button AbortButton;

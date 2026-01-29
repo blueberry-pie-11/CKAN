@@ -56,6 +56,10 @@ namespace CKAN.GUI
             Func<object, object, bool> rowsLinked)
         {
             InitializeComponent();
+            if (Platform.IsMono)
+            {
+                GridContextMenuStrip.Renderer = new FlatToolStripRenderer();
+            }
             ExplanationLabel.Text = TopLabelMessage;
             ModColumn.HeaderText  = ModuleColumnHeader;
             AbortButton.Text      = AbortButtonCaption;
@@ -154,6 +158,25 @@ namespace CKAN.GUI
                     binding.ResetItem(i);
                 }
             }
+        }
+
+        private void DownloadsGrid_MouseDown(object? sender, MouseEventArgs e)
+        {
+            if (e is { Button: MouseButtons.Right})
+            {
+                // Show the context menu
+                GridContextMenuStrip.Show(Cursor.Position);
+            }
+        }
+
+        private void CopyErrorToolStripMenuItem_Click(object? sender, EventArgs? e)
+        {
+            Clipboard.SetText(string.Join(Environment.NewLine,
+                                          DownloadsGrid.Rows
+                                                       .OfType<DataGridViewRow>()
+                                                       .Select(r => r.DataBoundItem)
+                                                       .OfType<DownloadRow>()
+                                                       .Select(r => r.Error)));
         }
 
         private void RetryButton_Click(object? sender, EventArgs? e)
