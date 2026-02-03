@@ -47,11 +47,13 @@ namespace CKAN.GUI
             //
             // ExplanationLabel
             //
+            this.ExplanationLabel.AutoSize = true;
+            this.ExplanationLabel.MaximumSize = new System.Drawing.Size(490, 0);
             this.ExplanationLabel.Dock = System.Windows.Forms.DockStyle.Top;
             this.ExplanationLabel.Font = new System.Drawing.Font(System.Drawing.SystemFonts.DefaultFont.Name, 12, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Pixel);
             this.ExplanationLabel.Location = new System.Drawing.Point(5, 0);
             this.ExplanationLabel.Name = "ExplanationLabel";
-            this.ExplanationLabel.Padding = new System.Windows.Forms.Padding(5,5,5,5);
+            this.ExplanationLabel.Padding = new System.Windows.Forms.Padding(0,0,0,8);
             this.ExplanationLabel.Size = new System.Drawing.Size(490, 60);
             resources.ApplyResources(this.ExplanationLabel, "ExplanationLabel");
             //

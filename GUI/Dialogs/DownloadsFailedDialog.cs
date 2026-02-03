@@ -100,6 +100,13 @@ namespace CKAN.GUI
                                      .Select(r => r.Data)
                                      .ToArray();
 
+        protected override void OnResize(EventArgs e)
+        {
+            ExplanationLabel.MaximumSize = new Size(ClientSize.Width - Padding.Horizontal,
+                                                    ClientSize.Height - Padding.Vertical);
+            base.OnResize(e);
+        }
+
         /// <summary>
         /// Open the user guide when the user presses F1
         /// </summary>
